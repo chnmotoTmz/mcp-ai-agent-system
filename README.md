@@ -36,7 +36,7 @@ LINE → Gemini → はてなブログ 自動化システム
 ### 1. 環境準備
 ```bash
 git clone https://github.com/chnmotoTmz/mcp-ai-agent-system.git
-cd mcp-ai-agent-system
+cd line-gemini-hatena-integration
 chmod +x setup_mcp.sh
 ./setup_mcp.sh
 ```
