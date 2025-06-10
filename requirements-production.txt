@@ -1,0 +1,59 @@
+# 本番環境用 requirements.txt
+# セキュリティとパフォーマンスを考慮した最小限の依存関係
+
+# Web Framework
+flask==3.0.0
+flask-sqlalchemy==3.1.1
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# LINE Bot SDK
+line-bot-sdk==3.6.0
+
+# AI/ML
+google-generativeai>=0.8.0
+
+# HTTP & API
+requests==2.31.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+
+# Configuration
+python-dotenv==1.0.0
+
+# Image Processing
+pillow==10.1.0
+
+# Web Scraping
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# Feed Processing
+feedparser==6.0.10
+
+# Text Processing
+markdown==3.5.1
+
+# Task Scheduling
+apscheduler==3.10.4
+
+# OAuth & Authentication
+requests-oauthlib==1.3.1
+
+# XML Processing
+xmltodict==0.13.0
+
+# Google APIs
+google-auth==2.23.4
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+google-api-python-client==2.108.0
+
+# Production Server
+gunicorn==21.2.0
+
+# Monitoring & Logging (Production)
+prometheus-client==0.19.0
+
+# Security
+cryptography>=41.0.0

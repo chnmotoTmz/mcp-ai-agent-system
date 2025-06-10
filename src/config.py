@@ -23,6 +23,9 @@ class Config:
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
     GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')  # デフォルト値設定
     
+    # Imgur設定
+    IMGUR_CLIENT_ID = os.getenv('IMGUR_CLIENT_ID')
+    
     # はてなブログ設定
     HATENA_ID = os.getenv('HATENA_ID')
     HATENA_BLOG_ID = os.getenv('HATENA_BLOG_ID')
@@ -69,3 +72,17 @@ class Config:
             raise ValueError(f"必須環境変数が設定されていません: {', '.join(missing)}")
         
         return True
+
+# LangGraphエージェント用の互換性のために個別変数をエクスポート
+LINE_CHANNEL_SECRET = Config.LINE_CHANNEL_SECRET
+LINE_CHANNEL_ACCESS_TOKEN = Config.LINE_CHANNEL_ACCESS_TOKEN
+GEMINI_API_KEY = Config.GEMINI_API_KEY
+GEMINI_MODEL = Config.GEMINI_MODEL
+IMGUR_CLIENT_ID = Config.IMGUR_CLIENT_ID
+HATENA_ID = Config.HATENA_ID
+HATENA_BLOG_ID = Config.HATENA_BLOG_ID
+HATENA_API_KEY = Config.HATENA_API_KEY
+HATENA_CONSUMER_KEY = Config.HATENA_CONSUMER_KEY
+HATENA_CONSUMER_SECRET = Config.HATENA_CONSUMER_SECRET
+HATENA_ACCESS_TOKEN = Config.HATENA_ACCESS_TOKEN
+HATENA_ACCESS_TOKEN_SECRET = Config.HATENA_ACCESS_TOKEN_SECRET

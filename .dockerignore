@@ -1,0 +1,73 @@
+# Docker ignore file
+# 本番環境Dockerイメージに含めないファイル・ディレクトリ
+
+# Git関連
+.git
+.gitignore
+
+# 開発環境ファイル
+.env
+.env.development
+.env.local
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+
+# IDE設定
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ログファイル
+logs/
+*.log
+
+# 一時ファイル
+tmp/
+temp/
+.tmp
+
+# バックアップ
+backups/
+*.backup
+*.bak
+
+# テストファイル
+test_*
+*_test.py
+tests/
+
+# ドキュメント（必要に応じて）
+README.md
+DEPLOYMENT.md
+*.md
+
+# 設定ファイル（テンプレートは除外）
+.env.production
+nginx.conf
+
+# 実行時生成ファイル
+instance/
+uploads/
+ssl/
+
+# OS固有ファイル
+.DS_Store
+Thumbs.db
+
+# Node.js関連（使用している場合）
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python関連
+build/
+dist/
+*.egg-info/

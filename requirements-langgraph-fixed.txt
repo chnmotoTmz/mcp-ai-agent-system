@@ -1,0 +1,49 @@
+# LangGraph エージェント用依存関係（競合解決版）
+
+# Core LangGraph dependencies with compatible versions
+langgraph>=0.2.0
+langgraph-checkpoint>=1.0.0
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-google-genai>=1.0.0
+
+# Compatible async/web framework versions
+anyio>=4.6.0  # MCP required version
+fastapi>=0.110.0  # Updated to support anyio 4.6+
+uvicorn>=0.27.0
+
+# FastMCP with compatible versions
+# fastmcp>=1.0.0  # Temporarily commented out due to version conflict
+
+# Manual MCP implementation dependencies
+httpx>=0.27.0
+websockets>=12.0
+jsonrpc-async-client>=1.0.0
+
+# Async processing
+aiohttp>=3.9.0
+aiofiles>=24.0.0
+
+# Data processing
+pydantic>=2.0.0
+typing-extensions>=4.8.0
+
+# Image processing
+Pillow>=10.0.0
+
+# Logging
+structlog>=23.0.0
+
+# Flask for web API (existing)
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# LINE Bot SDK (existing)
+line-bot-sdk>=3.0.0
+
+# Google Gemini (existing)
+google-generativeai>=0.7.0
+
+# Additional utilities
+python-dotenv>=1.0.0
+requests>=2.31.0

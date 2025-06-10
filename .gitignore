@@ -19,60 +19,64 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# Virtual Environment
-venv/
-ENV/
-env/
-.venv/
+# Claude Desktop作業ファイル（絶対禁止）
+*_fixed.py
+*_backup.py
+*_temp.py
+*_test.py
+*_copy.py
+debug_*.py
+temp_*
+test_temp_*
 
-# Environment Variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# ログファイル
+*.log
+logs/
 
-# Database
+# データベース
 *.db
 *.sqlite
 *.sqlite3
-instance/
+instance/*.db
 
-# Logs
-logs/
-*.log
-system*.log
-
-# Uploads
-uploads/
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.mp4
-*.mov
+# 環境設定
+.env
+.env.production
+.env.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS
+# 一時ファイル
+*.tmp
+*.bak
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# Temporary files
-debug_*.py
-test_*.py
-*_test.py
-*_debug.py
-*_fixed.py
-*_backup.py
+# テスト・デバッグ用画像
+test_img.*
+mcp_test.*
+debug_img.*
+
+# 重複ファイル
+*コピー*
+* - コピー*
+*:Zone.Identifier
+
+# 機密情報ファイル
+credentials.json
+google_photos_credentials.json
+google_photos_token.json
+*_token.json
+*_credentials.json

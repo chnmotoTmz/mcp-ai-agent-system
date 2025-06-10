@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "imgur": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "supergateway",
+        "--sse",
+        "https://mcp.pipedream.net/2311b26e-6f35-4839-bc54-333333e059a4/imgur"
+      ],
+      "description": "Pipedream Imgur MCP Server with OAuth authentication"
+    }
+  },
+  "version": "1.0.0",
+  "description": "MCP configuration for LINE-Gemini-Hatena integration"
+}
