@@ -1,21 +1,16 @@
 """
 バッチ処理システム
-一定時間内のメッセージを蓄積し、統合して記事化
+一定時間内のメッセージを蓄積して統合記事を作成
 """
 
 import asyncio
-import logging
+import threading
 import time
-from datetime import datetime, timedelta
+import logging
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
-from collections import defaultdict
-
-from sqlalchemy import and_
-from src.database import db, Message
-# Imgurを使用するため、はてなフォトライフは不要
-from src.services.hatena_service import HatenaService
-from src.services.gemini_service import GeminiService
+from datetime import datetime, timedelta
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -24,208 +19,154 @@ class BatchMessage:
     """バッチ処理用メッセージ"""
     message_id: str
     user_id: str
-    content: str
-    message_type: str
-    timestamp: datetime
+    message_type: str  # 'text' or 'image'
+    content: str = ""
     file_path: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.now)
     processed: bool = False
 
 @dataclass
-class BatchSession:
-    """バッチセッション"""
+class BatchData:
+    """バッチデータ"""
     user_id: str
-    start_time: datetime
-    end_time: datetime
     messages: List[BatchMessage] = field(default_factory=list)
-    images: List[str] = field(default_factory=list)
-    texts: List[str] = field(default_factory=list)
+    start_time: datetime = field(default_factory=datetime.now)
     
     def add_message(self, message: BatchMessage):
         """メッセージを追加"""
         self.messages.append(message)
-        
-        if message.message_type == 'text' and message.content.strip():
-            self.texts.append(message.content)
-        elif message.message_type == 'image' and message.file_path:
-            self.images.append(message.file_path)
+        logger.info(f"バッチにメッセージ追加: {message.message_type} (総数: {len(self.messages)})")
+    
+    def get_text_messages(self) -> List[BatchMessage]:
+        """テキストメッセージのみを取得"""
+        return [msg for msg in self.messages if msg.message_type == 'text']
+    
+    def get_image_messages(self) -> List[BatchMessage]:
+        """画像メッセージのみを取得"""
+        return [msg for msg in self.messages if msg.message_type == 'image']
+    
+    def is_expired(self, interval_minutes: int = 1) -> bool:
+        """バッチが期限切れかチェック"""
+        expiry_time = self.start_time + timedelta(minutes=interval_minutes)
+        return datetime.now() > expiry_time
     
     def has_content(self) -> bool:
-        """処理可能なコンテンツがあるかチェック"""
-        return len(self.texts) > 0 or len(self.images) > 0
-    
-    def get_summary(self) -> str:
-        """セッション要約を取得"""
-        return f"テキスト: {len(self.texts)}件, 画像: {len(self.images)}件"
+        """コンテンツが存在するかチェック"""
+        return len(self.messages) > 0
 
 class BatchProcessor:
     """バッチ処理システム"""
     
-    def __init__(self, batch_interval_minutes: int = 15):
-        self.batch_interval_minutes = batch_interval_minutes
-        # Imgurを使用するため、はてなフォトライフは不要
-        self.hatena_service = HatenaService()
-        self.gemini_service = GeminiService()
+    def __init__(self, interval_minutes: int = 1):
+        self.interval_minutes = interval_minutes
+        self.batch_data: Dict[str, BatchData] = {}  # user_id -> BatchData
+        self.processing_lock = threading.Lock()
+        self.is_running = False
+        self.processor_thread = None
         
-        # バッチセッション管理
-        self.active_sessions: Dict[str, BatchSession] = {}
-        self.processing = False
-        
-        logger.info(f"バッチ処理システム初期化完了 (間隔: {batch_interval_minutes}分)")
+        logger.info(f"バッチ処理システム初期化 (間隔: {interval_minutes}分)")
     
-    def start_batch_processing(self):
+    def start(self):
         """バッチ処理を開始"""
-        logger.info("バッチ処理システム開始")
-        self.processing = True
+        if self.is_running:
+            logger.warning("バッチ処理は既に実行中です")
+            return
         
-        # 定期実行のループ
-        asyncio.create_task(self._batch_loop())
+        self.is_running = True
+        self.processor_thread = threading.Thread(target=self._batch_loop, daemon=True)
+        self.processor_thread.start()
+        logger.info("バッチ処理スレッド開始")
     
-    def stop_batch_processing(self):
+    def stop(self):
         """バッチ処理を停止"""
-        logger.info("バッチ処理システム停止")
-        self.processing = False
+        self.is_running = False
+        if self.processor_thread:
+            self.processor_thread.join(timeout=5)
+        logger.info("バッチ処理停止")
     
-    async def _batch_loop(self):
-        """バッチ処理のメインループ"""
-        while self.processing:
-            try:
-                await self._process_batch_cycle()
-                # 次のサイクルまで待機
-                await asyncio.sleep(self.batch_interval_minutes * 60)
-                
-            except Exception as e:
-                logger.error(f"バッチ処理サイクルエラー: {e}")
-                await asyncio.sleep(60)  # エラー時は1分待機
-    
-    async def _process_batch_cycle(self):
-        """1回のバッチ処理サイクル"""
-        logger.info("バッチ処理サイクル開始")
-        
-        # 処理対象時間範囲を設定
-        end_time = datetime.now()
-        start_time = end_time - timedelta(minutes=self.batch_interval_minutes)
-        
-        logger.info(f"処理対象期間: {start_time} 〜 {end_time}")
-        
-        # 対象メッセージを取得
-        messages = self._get_messages_in_timeframe(start_time, end_time)
-        
-        if not messages:
-            logger.info("処理対象メッセージなし")
-            return
-        
-        logger.info(f"処理対象メッセージ: {len(messages)}件")
-        
-        # ユーザー別にグループ化
-        user_messages = self._group_messages_by_user(messages)
-        
-        # ユーザー別に処理
-        for user_id, user_msg_list in user_messages.items():
-            try:
-                await self._process_user_messages(user_id, user_msg_list, start_time, end_time)
-            except Exception as e:
-                logger.error(f"ユーザー {user_id} の処理エラー: {e}")
-        
-        logger.info("バッチ処理サイクル完了")
-    
-    def _get_messages_in_timeframe(self, start_time: datetime, end_time: datetime) -> List[Message]:
-        """指定時間範囲のメッセージを取得"""
-        try:
-            messages = db.session.query(Message).filter(
-                and_(
-                    Message.created_at >= start_time,
-                    Message.created_at <= end_time,
-                    Message.processed_by_batch == False  # バッチ未処理
-                )
-            ).order_by(Message.created_at.asc()).all()
+    def add_message(self, user_id: str, message_id: str, message_type: str, 
+                   content: str = "", file_path: Optional[str] = None):
+        """メッセージをバッチに追加"""
+        with self.processing_lock:
+            # ユーザーのバッチデータが存在しない場合は作成
+            if user_id not in self.batch_data:
+                self.batch_data[user_id] = BatchData(user_id=user_id)
             
-            return messages
-            
-        except Exception as e:
-            logger.error(f"メッセージ取得エラー: {e}")
-            return []
-    
-    def _group_messages_by_user(self, messages: List[Message]) -> Dict[str, List[Message]]:
-        """メッセージをユーザー別にグループ化"""
-        user_messages = defaultdict(list)
-        
-        for message in messages:
-            user_messages[message.user_id].append(message)
-        
-        return dict(user_messages)
-    
-    async def _process_user_messages(self, user_id: str, messages: List[Message], 
-                                   start_time: datetime, end_time: datetime):
-        """ユーザーのメッセージを処理"""
-        logger.info(f"ユーザー {user_id} のメッセージ処理開始: {len(messages)}件")
-        
-        # バッチセッション作成
-        session = BatchSession(
-            user_id=user_id,
-            start_time=start_time,
-            end_time=end_time
-        )
-        
-        # メッセージをセッションに追加
-        for message in messages:
-            batch_message = BatchMessage(
-                message_id=message.line_message_id,
-                user_id=message.user_id,
-                content=message.content or "",
-                message_type=message.message_type,
-                timestamp=message.created_at,
-                file_path=message.file_path
+            # メッセージを作成してバッチに追加
+            message = BatchMessage(
+                message_id=message_id,
+                user_id=user_id,
+                message_type=message_type,
+                content=content,
+                file_path=file_path
             )
-            session.add_message(batch_message)
-        
-        # コンテンツがない場合はスキップ
-        if not session.has_content():
-            logger.info(f"ユーザー {user_id}: 処理可能コンテンツなし")
-            self._mark_messages_as_processed(messages)
-            return
-        
-        logger.info(f"ユーザー {user_id}: {session.get_summary()}")
-        
-        try:
-            # 記事を生成・投稿
-            article_result = await self._create_and_publish_article(session)
             
-            if article_result.get('success'):
-                logger.info(f"ユーザー {user_id}: 記事投稿成功")
-                
-                # LINEに結果通知
-                await self._send_success_notification(user_id, article_result)
-            else:
-                logger.error(f"ユーザー {user_id}: 記事投稿失敗 - {article_result.get('error')}")
-                await self._send_error_notification(user_id, article_result.get('error'))
+            self.batch_data[user_id].add_message(message)
             
-            # メッセージを処理済みとしてマーク
-            self._mark_messages_as_processed(messages)
-            
-        except Exception as e:
-            logger.error(f"ユーザー {user_id} の記事処理エラー: {e}")
-            await self._send_error_notification(user_id, str(e))
+            logger.info(f"メッセージをバッチに追加: {user_id} - {message_type}")
     
-    async def _create_and_publish_article(self, session: BatchSession) -> Dict:
-        """記事を作成して投稿"""
-        try:
-            # 1. 画像をImgurにアップロード
-            image_tags = []
-            if session.images:
-                logger.info(f"画像アップロード開始: {len(session.images)}枚")
+    def _batch_loop(self):
+        """バッチ処理のメインループ"""
+        logger.info("バッチ処理ループ開始")
+        
+        while self.is_running:
+            try:
+                # 期限切れのバッチを処理
+                expired_batches = self._get_expired_batches()
                 
-                for image_path in session.images:
+                for user_id, batch_data in expired_batches:
+                    if batch_data.has_content():
+                        logger.info(f"期限切れバッチを処理開始: {user_id} ({len(batch_data.messages)}件)")
+                        self._process_batch(user_id, batch_data)
+                    
+                    # 処理済みバッチを削除
+                    with self.processing_lock:
+                        if user_id in self.batch_data:
+                            del self.batch_data[user_id]
+                
+                # 10秒間隔でチェック
+                time.sleep(10)
+                
+            except Exception as e:
+                logger.error(f"バッチ処理ループエラー: {e}")
+                time.sleep(10)
+    
+    def _get_expired_batches(self) -> List[tuple]:
+        """期限切れのバッチを取得"""
+        expired = []
+        
+        with self.processing_lock:
+            for user_id, batch_data in list(self.batch_data.items()):
+                if batch_data.is_expired(self.interval_minutes):
+                    expired.append((user_id, batch_data))
+        
+        return expired
+    
+    def _process_batch(self, user_id: str, batch_data: BatchData):
+        """バッチを処理して記事を作成"""
+        try:
+            # Imgur を使用
+            logger.info("Imgur画像アップロードを使用")
+            
+            from src.agents.content_creation_agent_fixed import ContentCreationAgent
+            
+            logger.info(f"バッチ処理開始: {user_id}")
+            
+            # 画像をImgurにアップロード
+            image_tags = []
+            
+            for image_msg in batch_data.get_image_messages():
+                if image_msg.file_path and os.path.exists(image_msg.file_path):
                     try:
-                        import time
+                        import asyncio
                         import sys
                         sys.path.append('/home/moto/line-gemini-hatena-integration')
                         from src.mcp_servers.imgur_server_fastmcp import upload_image
                         
-                        # Imgurにアップロード  
-                        import asyncio
+                        # 非同期でImgurにアップロード
                         upload_result = asyncio.run(upload_image(
-                            image_path=image_path,
-                            title=f"Image_{int(time.time())}",
+                            image_path=image_msg.file_path,
+                            title=f"Image_{image_msg.message_id}",
                             description="LINE Bot経由でアップロード",
                             privacy="hidden"
                         ))
@@ -242,171 +183,126 @@ class BatchProcessor:
                     except Exception as e:
                         logger.error(f"Imgur upload error: {e}")
             
-            # 2. テキストと画像を統合してコンテンツ作成
-            combined_content = self._create_combined_content(session.texts, image_tags)
+            # テキストメッセージを結合
+            text_messages = batch_data.get_text_messages()
+            combined_text = ""
             
-            # 3. AIで記事を生成
-            article_content = await self._generate_article_with_ai(combined_content, session)
+            if text_messages:
+                combined_text = "\\n".join([msg.content for msg in text_messages])
             
-            if not article_content:
-                return {'success': False, 'error': '記事生成に失敗しました'}
-            
-            # 4. はてなブログに投稿
-            publish_result = self.hatena_service.publish_article(
-                title=article_content.get('title', f"ライフログ {session.start_time.strftime('%Y/%m/%d %H:%M')}"),
-                content=article_content.get('content', ''),
-                categories=article_content.get('categories', ['ライフログ']),
-                draft=False
-            )
-            
-            if publish_result.get('success'):
-                return {
-                    'success': True,
-                    'title': article_content.get('title'),
-                    'url': publish_result.get('url'),
-                    'image_count': len(image_tags),
-                    'text_count': len(session.texts)
+            # AI Agentで統合記事を作成
+            agent_messages = [{
+                "content": self._create_integrated_content(combined_text, image_tags),
+                "type": "text",
+                "batch_info": {
+                    "text_count": len(text_messages),
+                    "image_count": len(image_tags),
+                    "start_time": batch_data.start_time.isoformat()
                 }
-            else:
-                return {'success': False, 'error': publish_result.get('error')}
+            }]
+            
+            # 非同期でAI Agentを実行
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                agent = ContentCreationAgent()
+                loop.run_until_complete(agent.initialize())
+                
+                result = loop.run_until_complete(agent.process_message(
+                    user_id=user_id,
+                    line_message_id=f"batch_{int(time.time())}",
+                    messages=agent_messages
+                ))
+                
+                logger.info(f"バッチ処理完了: {user_id} - {result}")
+                
+            finally:
+                loop.close()
                 
         except Exception as e:
-            logger.error(f"記事作成・投稿エラー: {e}")
-            return {'success': False, 'error': str(e)}
+            logger.error(f"バッチ処理エラー: {e}")
+            import traceback
+            traceback.print_exc()
     
-    def _create_combined_content(self, texts: List[str], image_tags: List[str]) -> str:
-        """テキストと画像タグを統合したコンテンツを作成"""
+    def _create_integrated_content(self, text_content: str, image_tags: List[str]) -> str:
+        """統合コンテンツを作成"""
         content_parts = []
         
-        # テキストを時系列順に追加
-        for text in texts:
-            if text.strip():
-                content_parts.append(text.strip())
+        # テキストがある場合は追加
+        if text_content.strip():
+            content_parts.append(text_content.strip())
         
-        # 画像タグを追加
+        # 画像タグがある場合は追加
         if image_tags:
-            content_parts.append("\n## 写真\n")
-            for tag in image_tags:
-                if tag:
-                    content_parts.append(tag)
+            content_parts.append("\\n画像:")
+            for i, tag in enumerate(image_tags, 1):
+                content_parts.append(f"{tag}")
         
-        return "\n\n".join(content_parts)
+        # バッチ処理の指示を追加
+        integrated_content = "\\n".join(content_parts)
+        
+        instruction = f"""
+以下の内容で統合記事を作成してください：
+
+{integrated_content}
+
+※この内容は複数のメッセージから統合されたものです。
+自然で読みやすい記事として整理してブログ投稿してください。
+画像がある場合は適切な位置に配置してください。
+        """
+        
+        return instruction.strip()
     
-    async def _generate_article_with_ai(self, content: str, session: BatchSession) -> Optional[Dict]:
-        """AIを使って記事を生成"""
-        try:
-            # プロンプトを作成
-            prompt = f"""
-以下のライフログから、読みやすいブログ記事を作成してください。
-
-## ライフログデータ
-期間: {session.start_time.strftime('%Y年%m月%d日 %H:%M')} - {session.end_time.strftime('%H:%M')}
-内容:
-{content}
-
-## 記事作成要件
-- 自然で読みやすい文章にしてください
-- 画像がある場合は適切な位置に配置してください
-- タイトルは内容を適切に表現してください
-- カテゴリは内容に基づいて設定してください
-
-JSON形式で以下のように出力してください:
-{{
-    "title": "記事タイトル",
-    "content": "記事本文（Markdown形式）",
-    "categories": ["カテゴリ1", "カテゴリ2"]
-}}
-"""
-            
-            # Geminiで記事生成
-            response = await self.gemini_service.generate_content(prompt)
-            
-            if response.get('success'):
-                # JSONレスポンスをパース
-                import json
-                try:
-                    article_data = json.loads(response.get('content', '{}'))
-                    return article_data
-                except json.JSONDecodeError:
-                    # JSON形式でない場合は直接使用
-                    return {
-                        'title': f"ライフログ {session.start_time.strftime('%Y/%m/%d')}",
-                        'content': response.get('content', ''),
-                        'categories': ['ライフログ']
+    def get_status(self) -> Dict[str, Any]:
+        """バッチ処理の状態を取得"""
+        with self.processing_lock:
+            return {
+                "is_running": self.is_running,
+                "interval_minutes": self.interval_minutes,
+                "active_batches": len(self.batch_data),
+                "batch_details": {
+                    user_id: {
+                        "message_count": len(batch.messages),
+                        "start_time": batch.start_time.isoformat(),
+                        "text_count": len(batch.get_text_messages()),
+                        "image_count": len(batch.get_image_messages())
                     }
-            else:
-                logger.error(f"AI記事生成エラー: {response.get('error')}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"AI記事生成エラー: {e}")
-            return None
+                    for user_id, batch in self.batch_data.items()
+                }
+            }
     
-    def _mark_messages_as_processed(self, messages: List[Message]):
-        """メッセージを処理済みとしてマーク"""
-        try:
-            for message in messages:
-                message.processed_by_batch = True
-                message.batch_processed_at = datetime.now()
-            
-            db.session.commit()
-            logger.info(f"メッセージ処理済みマーク完了: {len(messages)}件")
-            
-        except Exception as e:
-            logger.error(f"メッセージ処理済みマークエラー: {e}")
-            db.session.rollback()
-    
-    async def _send_success_notification(self, user_id: str, result: Dict):
-        """成功通知をLINEに送信"""
-        try:
-            from src.services.line_service import LineService
-            line_service = LineService()
-            
-            message = f"""✅ ライフログ記事を投稿しました！
+    def force_process_user(self, user_id: str) -> bool:
+        """指定ユーザーのバッチを強制処理"""
+        with self.processing_lock:
+            if user_id in self.batch_data:
+                batch_data = self.batch_data[user_id]
+                if batch_data.has_content():
+                    logger.info(f"強制バッチ処理: {user_id}")
+                    self._process_batch(user_id, batch_data)
+                    del self.batch_data[user_id]
+                    return True
+        return False
 
-📝 タイトル: {result.get('title', 'N/A')}
-🔗 URL: {result.get('url', 'N/A')}
-📊 統合データ: テキスト{result.get('text_count', 0)}件、画像{result.get('image_count', 0)}枚
+# グローバルバッチプロセッサー
+batch_processor = None
 
-次のバッチ処理まで約{self.batch_interval_minutes}分です。"""
-            
-            line_service.send_message(user_id, message)
-            
-        except Exception as e:
-            logger.error(f"成功通知送信エラー: {e}")
-    
-    async def _send_error_notification(self, user_id: str, error_message: str):
-        """エラー通知をLINEに送信"""
-        try:
-            from src.services.line_service import LineService
-            line_service = LineService()
-            
-            message = f"""❌ ライフログ記事の投稿でエラーが発生しました
+def get_batch_processor() -> BatchProcessor:
+    """バッチプロセッサーのシングルトンインスタンスを取得"""
+    global batch_processor
+    if batch_processor is None:
+        interval = int(os.getenv('BATCH_INTERVAL_MINUTES', '1'))
+        batch_processor = BatchProcessor(interval_minutes=interval)
+        batch_processor.start()
+    return batch_processor
 
-エラー内容: {error_message}
+def cleanup_batch_processor():
+    """バッチプロセッサーのクリーンアップ"""
+    global batch_processor
+    if batch_processor:
+        batch_processor.stop()
+        batch_processor = None
 
-次のバッチ処理で再試行されます。"""
-            
-            line_service.send_message(user_id, message)
-            
-        except Exception as e:
-            logger.error(f"エラー通知送信エラー: {e}")
-
-# 使用例とテスト
-if __name__ == "__main__":
-    import sys
-    
-    # ログ設定
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    async def test_batch_processor():
-        processor = BatchProcessor(batch_interval_minutes=1)  # テスト用に1分間隔
-        
-        # テスト実行
-        await processor._process_batch_cycle()
-    
-    # テスト実行
-    asyncio.run(test_batch_processor())
+# アプリケーション終了時のクリーンアップ
+import atexit
+atexit.register(cleanup_batch_processor)
